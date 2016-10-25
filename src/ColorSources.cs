@@ -24,7 +24,8 @@ namespace IndicatorLights
             BlinkColorSource.TryParse,
             PulsateColorSource.TryParse,
             DimColorSource.TryParse,
-            RandomColorSource.TryParse
+            RandomColorSource.TryParse,
+            ToggleColorSource.TryParse
         };
 
         /// <summary>
@@ -89,7 +90,6 @@ namespace IndicatorLights
             return new RandomColorSource(onSource, offSource, periodMillis, bias, seed);
         }
 
-
         /// <summary>
         /// Gets a source that applies a constant brightness multiplier to another source.
         /// </summary>
@@ -99,6 +99,17 @@ namespace IndicatorLights
         public static IColorSource Dim(IColorSource origin, float multiplier)
         {
             return new DimColorSource(origin, multiplier);
+        }
+
+        /// <summary>
+        /// Gets a source that switches between two other sources based on a toggle.
+        /// </summary>
+        /// <param name="toggle"></param>
+        /// <param name="onSource"></param>
+        /// <param name="offSource"></param>
+        /// <returns></returns>
+        public static IColorSource Toggle(IToggle toggle, IColorSource onSource, IColorSource offSource) {
+            return new ToggleColorSource(toggle, onSource, offSource);
         }
 
 
@@ -795,12 +806,121 @@ namespace IndicatorLights
         #endregion
 
 
-        #region ErrorColorSource
+        #region ToggleColorSource
         /// <summary>
-        /// A repeating "red-green-blue-pause, red-green-blue-pause" flasher, used to
-        /// indicate error conditions to assist mod authors in debugging config problems.
+        /// A color source that switches between two other color sources based on a boolean (toggle) input.
         /// </summary>
-        private class ErrorColorSource : IColorSource
+        private class ToggleColorSource : IColorSource {
+            private static readonly string TYPE_NAME = "toggle";
+            private readonly IToggle toggle;
+            private readonly IColorSource onSource;
+            private readonly IColorSource offSource;
+            private readonly string id;
+
+            public ToggleColorSource(IToggle toggle, IColorSource onSource, IColorSource offSource)
+            {
+                this.toggle = toggle;
+                this.onSource = onSource;
+                this.offSource = offSource;
+
+                if (offSource == null)
+                {
+                    this.id = string.Format("{0}({1},{2})", TYPE_NAME, toggle, onSource.ColorSourceID);
+                }
+                else
+                {
+                    this.id = string.Format("{0}({1},{2},{3})", TYPE_NAME, toggle, onSource.ColorSourceID, offSource.ColorSourceID);
+                }
+            }
+
+            /// <summary>
+            /// Try to get a toggle color source from a ParsedParameters. The expected format is:
+            ///
+            /// toggle(toggle, onSource, offSource)
+            /// toggle(toggle, onSource)
+            /// </summary>
+            public static IColorSource TryParse(PartModule module, ParsedParameters parsedParams)
+            {
+                if (parsedParams == null) return null;
+                if (!TYPE_NAME.Equals(parsedParams.Identifier)) return null;
+                if ((parsedParams.Count < 2) || (parsedParams.Count > 3))
+                {
+                    throw new ColorSourceException(
+                        module,
+                        TYPE_NAME + "() source specified " + parsedParams.Count + " parameters (2-3 required)");
+                }
+
+                IToggle toggle;
+                try
+                { 
+                    toggle = Identifiers.FindFirst<IToggle>(module.part, parsedParams[0]);
+                }
+                catch (Exception e)
+                {
+                    throw new ColorSourceException(module, TYPE_NAME + "() source has invalid toggle", e);
+                }
+                if (toggle == null) throw new ColorSourceException(module, TYPE_NAME + "() source has invalid toggle");
+
+                IColorSource onColor;
+                try
+                {
+                    onColor = FindPrivate(module, parsedParams[1]);
+                } catch (ColorSourceException e)
+                {
+                    throw new ColorSourceException(module, TYPE_NAME + "() source has invalid 'on' parameter", e);
+                }
+
+                IColorSource offColor = ColorSources.Constant(DefaultColor.Off);
+                if (parsedParams.Count > 2)
+                {
+                    try
+                    {
+                        offColor = FindPrivate(module, parsedParams[2]);
+                    } catch (ColorSourceException e)
+                    {
+                        throw new ColorSourceException(module, TYPE_NAME + "() source has invalid 'off' parameter", e);
+                    }
+                }
+
+                return new ToggleColorSource(toggle, onColor, offColor);
+            }
+
+            public string ColorSourceID
+            {
+                get { return id; }
+            }
+
+            public bool HasColor
+            {
+                get { return CurrentSource.HasColor; }
+            }
+
+            public Color OutputColor
+            {
+                get { return CurrentSource.OutputColor; }
+            }
+
+            /// <summary>
+            /// Gets whether the blinker is in the "on" (true) or "off" (false) state.
+            /// </summary>
+            private IColorSource CurrentSource
+            {
+                get
+                {
+                    return toggle.ToggleStatus ? onSource : offSource;
+                }
+            }
+      
+        }
+        #endregion
+
+
+    #region ErrorColorSource
+    /// <summary>
+    /// A repeating "red-green-blue-pause, red-green-blue-pause" flasher, used to
+    /// indicate error conditions to assist mod authors in debugging config problems.
+    /// </summary>
+    private class ErrorColorSource : IColorSource
         {
             public string ColorSourceID
             {
